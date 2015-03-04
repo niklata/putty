@@ -357,12 +357,13 @@ static void cipherlist_handler(union control *ctrl, void *dlg,
 	int i;
 
 	static const struct { char *s; int c; } ciphers[] = {
-	    { "3DES",			CIPHER_3DES },
-	    { "Blowfish",		CIPHER_BLOWFISH },
-	    { "DES",			CIPHER_DES },
-	    { "AES (SSH-2 only)",	CIPHER_AES },
-	    { "Arcfour (SSH-2 only)",	CIPHER_ARCFOUR },
-	    { "-- warn below here --",	CIPHER_WARN }
+	    { "ChaCha20-Poly1305 (SSH-2 only)",	CIPHER_CHACHAPOLY1305 },
+	    { "3DES",				CIPHER_3DES },
+	    { "Blowfish",			CIPHER_BLOWFISH },
+	    { "DES",				CIPHER_DES },
+	    { "AES (SSH-2 only)",		CIPHER_AES },
+	    { "Arcfour (SSH-2 only)",		CIPHER_ARCFOUR },
+	    { "-- warn below here --",		CIPHER_WARN }
 	};
 
 	/* Set up the "selected ciphers" box. */
@@ -2291,7 +2292,7 @@ void setup_config_box(struct controlbox *b, int midsession,
 	    c = ctrl_draglist(s, "Encryption cipher selection policy:", 's',
 			      HELPCTX(ssh_ciphers),
 			      cipherlist_handler, P(NULL));
-	    c->listbox.height = 6;
+	    c->listbox.height = 7;
 
 	    ctrl_checkbox(s, "Enable legacy use of single-DES in SSH-2", 'i',
 			  HELPCTX(ssh_ciphers),

@@ -10,6 +10,7 @@
 
 /* The cipher order given here is the default order. */
 static const struct keyvalwhere ciphernames[] = {
+    { "chachapoly", CIPHER_CHACHAPOLY1305,  -1, -1 },
     { "aes",        CIPHER_AES,             -1, -1 },
     { "blowfish",   CIPHER_BLOWFISH,        -1, -1 },
     { "3des",       CIPHER_3DES,            -1, -1 },

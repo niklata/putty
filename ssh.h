@@ -6,6 +6,7 @@
 #include "network.h"
 #include "int64.h"
 #include "misc.h"
+#include "sshcipher-chachapoly.h"
 
 struct ssh_channel;
 typedef struct ssh_tag *Ssh;
@@ -67,6 +68,7 @@ void share_setup_x11_channel(void *csv, void *chanv,
 #define SSH_CIPHER_DES		2
 #define SSH_CIPHER_3DES		3
 #define SSH_CIPHER_BLOWFISH	6
+#define SSH_CIPHER_CHACHAPOLY1305 7
 
 #ifdef MSCRYPTOAPI
 #define APIEXTRA 8
@@ -276,6 +278,7 @@ struct ssh2_cipher {
     int keylen;
     unsigned int flags;
 #define SSH_CIPHER_IS_CBC	1
+#define SSH_CIPHER_IS_CHACHAPOLY 2
     char *text_name;
 };
 
@@ -377,6 +380,7 @@ extern const struct ssh2_ciphers ssh2_des;
 extern const struct ssh2_ciphers ssh2_aes;
 extern const struct ssh2_ciphers ssh2_blowfish;
 extern const struct ssh2_ciphers ssh2_arcfour;
+extern const struct ssh2_ciphers ssh2_chachapoly;
 extern const struct ssh_hash ssh_sha1;
 extern const struct ssh_hash ssh_sha256;
 extern const struct ssh_hash ssh_sha384;
