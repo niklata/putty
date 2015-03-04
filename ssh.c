@@ -246,6 +246,8 @@ static char *ssh2_pkt_type(Pkt_KCtx pkt_kctx, Pkt_ACtx pkt_actx, int type)
     translate(SSH2_MSG_SERVICE_ACCEPT);
     translate(SSH2_MSG_KEXINIT);
     translate(SSH2_MSG_NEWKEYS);
+    translatek(SSH2_MSG_KEX_ECDH_INIT, SSH2_PKTCTX_ECDHKEX);
+    translatek(SSH2_MSG_KEX_ECDH_REPLY, SSH2_PKTCTX_ECDHKEX);
     translatek(SSH2_MSG_KEXDH_INIT, SSH2_PKTCTX_DHGROUP);
     translatek(SSH2_MSG_KEXDH_REPLY, SSH2_PKTCTX_DHGROUP);
     translatek(SSH2_MSG_KEX_DH_GEX_REQUEST, SSH2_PKTCTX_DHGEX);
@@ -6172,6 +6174,10 @@ static void do_ssh2_transport(Ssh ssh, void *vin, int inlen,
 	s->n_preferred_kex = 0;
 	for (i = 0; i < KEX_MAX; i++) {
 	    switch (conf_get_int_int(ssh->conf, CONF_ssh_kexlist, i)) {
+	      case KEX_C25519:
+	        s->preferred_kex[s->n_preferred_kex++] =
+		    &ssh_c25519_kex;
+	        break;
 	      case KEX_DHGEX:
 		s->preferred_kex[s->n_preferred_kex++] =
 		    &ssh_diffiehellman_gex;
@@ -6634,7 +6640,57 @@ static void do_ssh2_transport(Ssh ssh, void *vin, int inlen,
 	    crWaitUntilV(pktin);                /* Ignore packet */
     }
 
-    if (ssh->kex->main_type == KEXTYPE_DH) {
+    if (ssh->kex->main_type == KEXTYPE_C25519) {
+	logevent("Doing Curve25519 key exchange");
+	ssh->pkt_kctx = SSH2_PKTCTX_ECDHKEX;
+	ssh->kex_ctx = snew(struct c25519_ctx);
+
+	c25519_init(ssh->kex_ctx);
+
+	s->pktout = ssh2_pkt_init(SSH2_MSG_KEX_ECDH_INIT);
+	ssh2_pkt_addstring_start(s->pktout);
+	{
+	    struct c25519_ctx *c25519ctx = ssh->kex_ctx;
+	    ssh2_pkt_addstring_data(s->pktout, c25519ctx->client_pubkey,
+				    sizeof(c25519ctx->client_pubkey));
+	}
+	ssh2_pkt_send_noqueue(ssh, s->pktout);
+
+	crWaitUntilV(pktin);
+	if (pktin->type != SSH2_MSG_KEX_ECDH_REPLY) {
+	    bombout(("expected ecdh reply packet from server"));
+	    crStopV;
+	}
+	ssh_pkt_getstring(pktin, &s->hostkeydata, &s->hostkeylen);
+	s->hkey = ssh->hostkey->newkey(s->hostkeydata, s->hostkeylen);
+	{
+	    struct c25519_ctx *c25519ctx = ssh->kex_ctx;
+	    int slen;
+	    ssh_pkt_getstring(pktin, &c25519ctx->server_pubkey, &slen);
+	    if (slen != CURVE25519_SIZE) {
+		bombout(("Incorrect size for server Curve25519 pubkey"));
+		crStopV;
+	    }
+	}
+	ssh_pkt_getstring(pktin, &s->sigdata, &s->siglen);
+
+	s->K = c25519_mix(ssh->kex_ctx);
+
+	/* We assume everything from now on will be quick, and it might
+	 * involve user interaction. */
+	set_busy_status(ssh->frontend, BUSY_NOT);
+
+	hash_string(ssh->kex->hash, ssh->exhash, s->hostkeydata, s->hostkeylen);
+	{
+	    struct c25519_ctx *c25519ctx = ssh->kex_ctx;
+	    hash_string(ssh->kex->hash, ssh->exhash, c25519ctx->client_pubkey,
+			CURVE25519_SIZE);
+	    hash_string(ssh->kex->hash, ssh->exhash, c25519ctx->server_pubkey,
+			CURVE25519_SIZE);
+	}
+
+	c25519_cleanup(ssh->kex_ctx);
+    } else if (ssh->kex->main_type == KEXTYPE_DH) {
         /*
          * Work out the number of bits of key we will need from the
          * key exchange. We start with the maximum key length of

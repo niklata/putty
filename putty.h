@@ -254,6 +254,7 @@ enum {
     KEX_DHGEX,
     KEX_RSA,
     KEX_ECDH,
+    KEX_C25519,
     KEX_MAX
 };
 
