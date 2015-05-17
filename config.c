@@ -357,6 +357,7 @@ static void cipherlist_handler(union control *ctrl, void *dlg,
 	int i;
 
 	static const struct { const char *s; int c; } ciphers[] = {
+	    { "ChaCha20-Poly1305 (SSH-2 only)",	CIPHER_CHACHAPOLY1305 },
 	    { "3DES",			CIPHER_3DES },
 	    { "Blowfish",		CIPHER_BLOWFISH },
 	    { "DES",			CIPHER_DES },
@@ -429,6 +430,7 @@ static void kexlist_handler(union control *ctrl, void *dlg,
 	int i;
 
 	static const struct { const char *s; int k; } kexes[] = {
+	    { "Curve25519 key exchange",	KEX_C25519 },
 	    { "Diffie-Hellman group 1",		KEX_DHGROUP1 },
 	    { "Diffie-Hellman group 14",	KEX_DHGROUP14 },
 	    { "Diffie-Hellman group exchange",	KEX_DHGEX },
@@ -2294,7 +2296,7 @@ void setup_config_box(struct controlbox *b, int midsession,
 	    c = ctrl_draglist(s, "Encryption cipher selection policy:", 's',
 			      HELPCTX(ssh_ciphers),
 			      cipherlist_handler, P(NULL));
-	    c->listbox.height = 6;
+	    c->listbox.height = 7;
 
 	    ctrl_checkbox(s, "Enable legacy use of single-DES in SSH-2", 'i',
 			  HELPCTX(ssh_ciphers),

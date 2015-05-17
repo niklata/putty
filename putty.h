@@ -254,6 +254,7 @@ enum {
     KEX_DHGEX,
     KEX_RSA,
     KEX_ECDH,
+    KEX_C25519,
     KEX_MAX
 };
 
@@ -265,6 +266,7 @@ enum {
     CIPHER_3DES,
     CIPHER_BLOWFISH,
     CIPHER_AES,			       /* (SSH-2 only) */
+    CIPHER_CHACHAPOLY1305,
     CIPHER_DES,
     CIPHER_ARCFOUR,
     CIPHER_MAX			       /* no. ciphers (inc warn) */

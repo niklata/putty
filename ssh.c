@@ -251,6 +251,8 @@ static const char *ssh2_pkt_type(Pkt_KCtx pkt_kctx, Pkt_ACtx pkt_actx,
     translate(SSH2_MSG_SERVICE_ACCEPT);
     translate(SSH2_MSG_KEXINIT);
     translate(SSH2_MSG_NEWKEYS);
+    translatek(SSH2_MSG_KEX_ECDH_INIT, SSH2_PKTCTX_ECDHKEX);
+    translatek(SSH2_MSG_KEX_ECDH_REPLY, SSH2_PKTCTX_ECDHKEX);
     translatek(SSH2_MSG_KEXDH_INIT, SSH2_PKTCTX_DHGROUP);
     translatek(SSH2_MSG_KEXDH_REPLY, SSH2_PKTCTX_DHGROUP);
     translatek(SSH2_MSG_KEX_DH_GEX_REQUEST_OLD, SSH2_PKTCTX_DHGEX);
@@ -1710,77 +1712,128 @@ static struct Packet *ssh2_rdpkt(Ssh ssh, const unsigned char **data,
 				   st->pktin->data + 4,
 				   st->packetlen - 4);
     } else {
-	st->pktin->data = snewn(st->cipherblk + APIEXTRA, unsigned char);
+	if (ssh->sccipher && ssh->sccipher->flags & SSH_CIPHER_IS_CHACHAPOLY) {
+	    st->pktin->data = snewn(CHACHA_HEADERLEN + APIEXTRA, unsigned char);
 
-	/*
-	 * Acquire and decrypt the first block of the packet. This will
-	 * contain the length and padding details.
-	 */
-	for (st->i = st->len = 0; st->i < st->cipherblk; st->i++) {
-	    while ((*datalen) == 0)
-		crReturn(NULL);
-	    st->pktin->data[st->i] = *(*data)++;
-	    (*datalen)--;
-	}
+	    /*
+	     * Acquire and decrypt the first block of the packet. This will
+	     * contain the length and padding details.
+	     */
+	    for (st->i = st->len = 0; st->i < CHACHA_HEADERLEN; st->i++) {
+		while ((*datalen) == 0)
+		    crReturn(NULL);
+		st->pktin->data[st->i] = *(*data)++;
+		(*datalen)--;
+	    }
 
-	if (ssh->sccipher)
-	    ssh->sccipher->decrypt(ssh->sc_cipher_ctx,
-				   st->pktin->data, st->cipherblk);
+	    int ret;
+	    ret = chachapoly_get_length(ssh->sc_cipher_ctx, &st->len,
+		    st->incoming_sequence,
+		    st->pktin->data, CHACHA_HEADERLEN);
+	    if (ret < 0) {
+		bombout(("Incoming packet had bad length after decryption"));
+		ssh_free_packet(st->pktin);
+		crStop(NULL);
+	    }
+	    if (st->len < 0 || st->len > OUR_V2_PACKETLIMIT) {
+		bombout(("Incoming packet was garbled on decryption"));
+		ssh_free_packet(st->pktin);
+		crStop(NULL);
+	    }
+	    st->packetlen = st->len + CHACHA_HEADERLEN;
+	    st->pktin->maxlen = CHACHA_HEADERLEN + st->len + POLY1305_TAGLEN;
+	    st->pktin->data = sresize(st->pktin->data,
+		    st->pktin->maxlen + APIEXTRA,
+		    unsigned char);
+	    for (st->i = CHACHA_HEADERLEN;
+	         st->i < CHACHA_HEADERLEN + st->len + POLY1305_TAGLEN;
+	         st->i++) {
+		while ((*datalen) == 0)
+		    crReturn(NULL);
+		st->pktin->data[st->i] = *(*data)++;
+		(*datalen)--;
+	    }
+	    ret = chachapoly_crypt(ssh->sc_cipher_ctx, st->incoming_sequence,
+	                           st->pktin->data, st->pktin->data,
+	                           st->len, CHACHA_HEADERLEN, 0, 0);
+	    if (ret < 0) {
+		bombout(("Incorrect poly1305 tag received on packet"));
+		ssh_free_packet(st->pktin);
+		crStop(NULL);
+	    }
+	} else {
+	    st->pktin->data = snewn(st->cipherblk + APIEXTRA, unsigned char);
 
-	/*
-	 * Now get the length figure.
-	 */
-	st->len = toint(GET_32BIT(st->pktin->data));
+	    /*
+	     * Acquire and decrypt the first block of the packet. This will
+	     * contain the length and padding details.
+	     */
+	    for (st->i = st->len = 0; st->i < st->cipherblk; st->i++) {
+		while ((*datalen) == 0)
+		    crReturn(NULL);
+		st->pktin->data[st->i] = *(*data)++;
+		(*datalen)--;
+	    }
 
-	/*
-	 * _Completely_ silly lengths should be stomped on before they
-	 * do us any more damage.
-	 */
-	if (st->len < 0 || st->len > OUR_V2_PACKETLIMIT ||
-	    (st->len + 4) % st->cipherblk != 0) {
-	    bombout(("Incoming packet was garbled on decryption"));
-	    ssh_free_packet(st->pktin);
-	    crStop(NULL);
-	}
+	    if (ssh->sccipher)
+		ssh->sccipher->decrypt(ssh->sc_cipher_ctx,
+	                               st->pktin->data, st->cipherblk);
 
-	/*
-	 * So now we can work out the total packet length.
-	 */
-	st->packetlen = st->len + 4;
+	    /*
+	     * Now get the length figure.
+	     */
+	    st->len = toint(GET_32BIT(st->pktin->data));
 
-	/*
-	 * Allocate memory for the rest of the packet.
-	 */
-	st->pktin->maxlen = st->packetlen + st->maclen;
-	st->pktin->data = sresize(st->pktin->data,
-				  st->pktin->maxlen + APIEXTRA,
-				  unsigned char);
+	    /*
+	     * _Completely_ silly lengths should be stomped on before they
+	     * do us any more damage.
+	     */
+	    if (st->len < 0 || st->len > OUR_V2_PACKETLIMIT ||
+	        (st->len + 4) % st->cipherblk != 0) {
+		bombout(("Incoming packet was garbled on decryption"));
+		ssh_free_packet(st->pktin);
+		crStop(NULL);
+	    }
 
-	/*
-	 * Read and decrypt the remainder of the packet.
-	 */
-	for (st->i = st->cipherblk; st->i < st->packetlen + st->maclen;
-	     st->i++) {
-	    while ((*datalen) == 0)
-		crReturn(NULL);
-	    st->pktin->data[st->i] = *(*data)++;
-	    (*datalen)--;
-	}
-	/* Decrypt everything _except_ the MAC. */
-	if (ssh->sccipher)
-	    ssh->sccipher->decrypt(ssh->sc_cipher_ctx,
-				   st->pktin->data + st->cipherblk,
-				   st->packetlen - st->cipherblk);
+	    /*
+	     * So now we can work out the total packet length.
+	     */
+	    st->packetlen = st->len + 4;
 
-	/*
-	 * Check the MAC.
-	 */
-	if (ssh->scmac
-	    && !ssh->scmac->verify(ssh->sc_mac_ctx, st->pktin->data,
-				   st->len + 4, st->incoming_sequence)) {
-	    bombout(("Incorrect MAC received on packet"));
-	    ssh_free_packet(st->pktin);
-	    crStop(NULL);
+	    /*
+	     * Allocate memory for the rest of the packet.
+	     */
+	    st->pktin->maxlen = st->packetlen + st->maclen;
+	    st->pktin->data = sresize(st->pktin->data,
+	                              st->pktin->maxlen + APIEXTRA,
+	                              unsigned char);
+
+	    /*
+	     * Read and decrypt the remainder of the packet.
+	     */
+	    for (st->i = st->cipherblk; st->i < st->packetlen + st->maclen;
+	         st->i++) {
+		while ((*datalen) == 0)
+		    crReturn(NULL);
+		st->pktin->data[st->i] = *(*data)++;
+		(*datalen)--;
+	    }
+	    /* Decrypt everything _except_ the MAC. */
+	    if (ssh->sccipher)
+		ssh->sccipher->decrypt(ssh->sc_cipher_ctx,
+		                       st->pktin->data + st->cipherblk,
+		                       st->packetlen - st->cipherblk);
+
+	    /*
+	     * Check the MAC.
+	     */
+	    if (ssh->scmac
+	        && !ssh->scmac->verify(ssh->sc_mac_ctx, st->pktin->data,
+	                               st->len + 4, st->incoming_sequence)) {
+		bombout(("Incorrect MAC received on packet"));
+		ssh_free_packet(st->pktin);
+		crStop(NULL);
+	    }
 	}
     }
     /* Get and sanity-check the amount of random padding. */
@@ -2264,40 +2317,55 @@ static int ssh2_pkt_construct(Ssh ssh, struct Packet *pkt)
     cipherblk = ssh->cscipher ? ssh->cscipher->blksize : 8;  /* block size */
     cipherblk = cipherblk < 8 ? 8 : cipherblk;	/* or 8 if blksize < 8 */
     padding = 4;
-    unencrypted_prefix = (ssh->csmac && ssh->csmac_etm) ? 4 : 0;
-    if (pkt->length + padding < pkt->forcepad)
+    int pplen;
+    if (ssh->cscipher && ssh->cscipher->flags & SSH_CIPHER_IS_CHACHAPOLY) {
+	pplen = pkt->length + padding - CHACHA_HEADERLEN;
+	maclen = POLY1305_TAGLEN;
+	unencrypted_prefix = 0;
+    } else {
+	pplen = pkt->length + padding;
+	maclen = ssh->csmac ? ssh->csmac->len : 0;
+	unencrypted_prefix = (ssh->csmac && ssh->csmac_etm) ? 4 : 0;
+    }
+    if (pplen < pkt->forcepad)
 	padding = pkt->forcepad - pkt->length;
     padding +=
-	(cipherblk - (pkt->length - unencrypted_prefix + padding) % cipherblk)
-        % cipherblk;
+	(cipherblk - (pplen - unencrypted_prefix) % cipherblk) % cipherblk;
     assert(padding <= 255);
-    maclen = ssh->csmac ? ssh->csmac->len : 0;
     ssh2_pkt_ensure(pkt, pkt->length + padding + maclen);
     pkt->data[4] = padding;
     for (i = 0; i < padding; i++)
 	pkt->data[pkt->length + i] = random_byte();
     PUT_32BIT(pkt->data, pkt->length + padding - 4);
-    if (ssh->csmac && ssh->csmac_etm) {
-        /*
-         * OpenSSH-defined encrypt-then-MAC protocol.
-         */
-        if (ssh->cscipher)
-            ssh->cscipher->encrypt(ssh->cs_cipher_ctx,
-                                   pkt->data + 4, pkt->length + padding - 4);
-        ssh->csmac->generate(ssh->cs_mac_ctx, pkt->data,
-                             pkt->length + padding,
-                             ssh->v2_outgoing_sequence);
+    if (ssh->cscipher && ssh->cscipher->flags & SSH_CIPHER_IS_CHACHAPOLY) {
+	int ret;
+	ret = chachapoly_crypt(ssh->cs_cipher_ctx, ssh->v2_outgoing_sequence,
+	                       pkt->data, pkt->data,
+	                       pkt->length + padding - CHACHA_HEADERLEN,
+	                       CHACHA_HEADERLEN, 0, 1);
     } else {
-        /*
-         * SSH-2 standard protocol.
-         */
-        if (ssh->csmac)
-            ssh->csmac->generate(ssh->cs_mac_ctx, pkt->data,
-                                 pkt->length + padding,
-                                 ssh->v2_outgoing_sequence);
-        if (ssh->cscipher)
-            ssh->cscipher->encrypt(ssh->cs_cipher_ctx,
-                                   pkt->data, pkt->length + padding);
+	if (ssh->csmac && ssh->csmac_etm) {
+	    /*
+	     * OpenSSH-defined encrypt-then-MAC protocol.
+	     */
+	    if (ssh->cscipher)
+		ssh->cscipher->encrypt(ssh->cs_cipher_ctx,
+				       pkt->data + 4, pkt->length + padding - 4);
+	    ssh->csmac->generate(ssh->cs_mac_ctx, pkt->data,
+				 pkt->length + padding,
+				 ssh->v2_outgoing_sequence);
+	} else {
+	    /*
+	     * SSH-2 standard protocol.
+	     */
+	    if (ssh->csmac)
+		ssh->csmac->generate(ssh->cs_mac_ctx, pkt->data,
+				     pkt->length + padding,
+				     ssh->v2_outgoing_sequence);
+	    if (ssh->cscipher)
+		ssh->cscipher->encrypt(ssh->cs_cipher_ctx,
+				       pkt->data, pkt->length + padding);
+	}
     }
 
     ssh->v2_outgoing_sequence++;       /* whether or not we MACed */
@@ -6259,6 +6327,10 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 	s->n_preferred_kex = 0;
 	for (i = 0; i < KEX_MAX; i++) {
 	    switch (conf_get_int_int(ssh->conf, CONF_ssh_kexlist, i)) {
+	      case KEX_C25519:
+	        s->preferred_kex[s->n_preferred_kex++] =
+		    &ssh_c25519_kex;
+	        break;
 	      case KEX_DHGEX:
 		s->preferred_kex[s->n_preferred_kex++] =
 		    &ssh_diffiehellman_gex;
@@ -6295,6 +6367,10 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 	s->n_preferred_ciphers = 0;
 	for (i = 0; i < CIPHER_MAX; i++) {
 	    switch (conf_get_int_int(ssh->conf, CONF_ssh_cipherlist, i)) {
+	      case CIPHER_CHACHAPOLY1305:
+		s->preferred_ciphers[s->n_preferred_ciphers++] =
+		    &ssh2_chachapoly;
+		break;
 	      case CIPHER_BLOWFISH:
 		s->preferred_ciphers[s->n_preferred_ciphers++] = &ssh2_blowfish;
 		break;
@@ -6652,7 +6728,58 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 	    crWaitUntilV(pktin);                /* Ignore packet */
     }
 
-    if (ssh->kex->main_type == KEXTYPE_DH) {
+    if (ssh->kex->main_type == KEXTYPE_C25519) {
+	logevent("Doing Curve25519 key exchange");
+	ssh->pkt_kctx = SSH2_PKTCTX_ECDHKEX;
+	ssh->kex_ctx = snew(struct c25519_ctx);
+
+	c25519_init(ssh->kex_ctx);
+
+	s->pktout = ssh2_pkt_init(SSH2_MSG_KEX_ECDH_INIT);
+	ssh2_pkt_addstring_start(s->pktout);
+	{
+	    struct c25519_ctx *c25519ctx = ssh->kex_ctx;
+	    ssh2_pkt_addstring_data(s->pktout, c25519ctx->client_pubkey,
+				    sizeof(c25519ctx->client_pubkey));
+	}
+	ssh2_pkt_send_noqueue(ssh, s->pktout);
+
+	crWaitUntilV(pktin);
+	if (pktin->type != SSH2_MSG_KEX_ECDH_REPLY) {
+	    bombout(("expected ecdh reply packet from server"));
+	    crStopV;
+	}
+	ssh_pkt_getstring(pktin, &s->hostkeydata, &s->hostkeylen);
+        s->hkey = ssh->hostkey->newkey(ssh->hostkey,
+                                       s->hostkeydata, s->hostkeylen);
+	{
+	    struct c25519_ctx *c25519ctx = ssh->kex_ctx;
+	    int slen;
+	    ssh_pkt_getstring(pktin, &c25519ctx->server_pubkey, &slen);
+	    if (slen != CURVE25519_SIZE) {
+		bombout(("Incorrect size for server Curve25519 pubkey"));
+		crStopV;
+	    }
+	}
+	ssh_pkt_getstring(pktin, &s->sigdata, &s->siglen);
+
+	s->K = c25519_mix(ssh->kex_ctx);
+
+	/* We assume everything from now on will be quick, and it might
+	 * involve user interaction. */
+	set_busy_status(ssh->frontend, BUSY_NOT);
+
+	hash_string(ssh->kex->hash, ssh->exhash, s->hostkeydata, s->hostkeylen);
+	{
+	    struct c25519_ctx *c25519ctx = ssh->kex_ctx;
+	    hash_string(ssh->kex->hash, ssh->exhash, c25519ctx->client_pubkey,
+			CURVE25519_SIZE);
+	    hash_string(ssh->kex->hash, ssh->exhash, c25519ctx->server_pubkey,
+			CURVE25519_SIZE);
+	}
+
+	c25519_cleanup(ssh->kex_ctx);
+    } else if (ssh->kex->main_type == KEXTYPE_DH) {
         /*
          * Work out the number of bits of key we will need from the
          * key exchange. We start with the maximum key length of
@@ -7066,9 +7193,13 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 
     if (ssh->cs_mac_ctx)
 	ssh->csmac->free_context(ssh->cs_mac_ctx);
-    ssh->csmac = s->csmac_tobe;
-    ssh->csmac_etm = s->csmac_etm_tobe;
-    ssh->cs_mac_ctx = ssh->csmac->make_context();
+    if (ssh->cscipher->flags & SSH_CIPHER_IS_CHACHAPOLY) {
+	ssh->csmac = NULL;
+    } else {
+	ssh->csmac = s->csmac_tobe;
+	ssh->csmac_etm = s->csmac_etm_tobe;
+	ssh->cs_mac_ctx = ssh->csmac->make_context();
+    }
 
     if (ssh->cs_comp_ctx)
 	ssh->cscomp->compress_cleanup(ssh->cs_comp_ctx);
@@ -7086,22 +7217,25 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 	assert((ssh->cscipher->keylen+7) / 8 <=
 	       ssh->kex->hash->hlen * SSH2_MKKEY_ITERS);
 	ssh->cscipher->setkey(ssh->cs_cipher_ctx, keyspace);
-	ssh2_mkkey(ssh,s->K,s->exchange_hash,'A',keyspace);
-	assert(ssh->cscipher->blksize <=
-	       ssh->kex->hash->hlen * SSH2_MKKEY_ITERS);
-	ssh->cscipher->setiv(ssh->cs_cipher_ctx, keyspace);
-	ssh2_mkkey(ssh,s->K,s->exchange_hash,'E',keyspace);
-	assert(ssh->csmac->len <=
-	       ssh->kex->hash->hlen * SSH2_MKKEY_ITERS);
-	ssh->csmac->setkey(ssh->cs_mac_ctx, keyspace);
+	if (!(ssh->cscipher->flags & SSH_CIPHER_IS_CHACHAPOLY)) {
+	    ssh2_mkkey(ssh,s->K,s->exchange_hash,'A',keyspace);
+	    assert(ssh->cscipher->blksize <=
+	           ssh->kex->hash->hlen * SSH2_MKKEY_ITERS);
+	    ssh->cscipher->setiv(ssh->cs_cipher_ctx, keyspace);
+	    ssh2_mkkey(ssh,s->K,s->exchange_hash,'E',keyspace);
+	    assert(ssh->csmac->len <=
+	           ssh->kex->hash->hlen * SSH2_MKKEY_ITERS);
+	    ssh->csmac->setkey(ssh->cs_mac_ctx, keyspace);
+	}
 	smemclr(keyspace, sizeof(keyspace));
     }
 
     logeventf(ssh, "Initialised %.200s client->server encryption",
 	      ssh->cscipher->text_name);
-    logeventf(ssh, "Initialised %.200s client->server MAC algorithm%s",
-	      ssh->csmac->text_name,
-              ssh->csmac_etm ? " (in ETM mode)" : "");
+    if (ssh->csmac)
+	logeventf(ssh, "Initialised %.200s client->server MAC algorithm%s",
+		  ssh->csmac->text_name,
+		  ssh->csmac_etm ? " (in ETM mode)" : "");
     if (ssh->cscomp->text_name)
 	logeventf(ssh, "Initialised %s compression",
 		  ssh->cscomp->text_name);
@@ -7134,9 +7268,13 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 
     if (ssh->sc_mac_ctx)
 	ssh->scmac->free_context(ssh->sc_mac_ctx);
-    ssh->scmac = s->scmac_tobe;
-    ssh->scmac_etm = s->scmac_etm_tobe;
-    ssh->sc_mac_ctx = ssh->scmac->make_context();
+    if (ssh->sccipher->flags & SSH_CIPHER_IS_CHACHAPOLY) {
+	ssh->scmac = NULL;
+    } else {
+	ssh->scmac = s->scmac_tobe;
+	ssh->scmac_etm = s->scmac_etm_tobe;
+	ssh->sc_mac_ctx = ssh->scmac->make_context();
+    }
 
     if (ssh->sc_comp_ctx)
 	ssh->sccomp->decompress_cleanup(ssh->sc_comp_ctx);
@@ -7154,21 +7292,24 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 	assert((ssh->sccipher->keylen+7) / 8 <=
 	       ssh->kex->hash->hlen * SSH2_MKKEY_ITERS);
 	ssh->sccipher->setkey(ssh->sc_cipher_ctx, keyspace);
-	ssh2_mkkey(ssh,s->K,s->exchange_hash,'B',keyspace);
-	assert(ssh->sccipher->blksize <=
-	       ssh->kex->hash->hlen * SSH2_MKKEY_ITERS);
-	ssh->sccipher->setiv(ssh->sc_cipher_ctx, keyspace);
-	ssh2_mkkey(ssh,s->K,s->exchange_hash,'F',keyspace);
-	assert(ssh->scmac->len <=
-	       ssh->kex->hash->hlen * SSH2_MKKEY_ITERS);
-	ssh->scmac->setkey(ssh->sc_mac_ctx, keyspace);
+	if (!(ssh->sccipher->flags & SSH_CIPHER_IS_CHACHAPOLY)) {
+	    ssh2_mkkey(ssh,s->K,s->exchange_hash,'B',keyspace);
+	    assert(ssh->sccipher->blksize <=
+	           ssh->kex->hash->hlen * SSH2_MKKEY_ITERS);
+	    ssh->sccipher->setiv(ssh->sc_cipher_ctx, keyspace);
+	    ssh2_mkkey(ssh,s->K,s->exchange_hash,'F',keyspace);
+	    assert(ssh->scmac->len <=
+	           ssh->kex->hash->hlen * SSH2_MKKEY_ITERS);
+	    ssh->scmac->setkey(ssh->sc_mac_ctx, keyspace);
+	}
 	smemclr(keyspace, sizeof(keyspace));
     }
     logeventf(ssh, "Initialised %.200s server->client encryption",
 	      ssh->sccipher->text_name);
-    logeventf(ssh, "Initialised %.200s server->client MAC algorithm%s",
-	      ssh->scmac->text_name,
-              ssh->scmac_etm ? " (in ETM mode)" : "");
+    if (ssh->scmac)
+	logeventf(ssh, "Initialised %.200s server->client MAC algorithm%s",
+		  ssh->scmac->text_name,
+		  ssh->scmac_etm ? " (in ETM mode)" : "");
     if (ssh->sccomp->text_name)
 	logeventf(ssh, "Initialised %s decompression",
 		  ssh->sccomp->text_name);
