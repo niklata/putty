@@ -6124,39 +6124,7 @@ static void ssh1_protocol(Ssh ssh, const void *vin, int inlen,
 }
 
 /*
- * Utility routine for decoding comma-separated strings in KEXINIT.
- */
-static int in_commasep_string(char const *needle, char const *haystack,
-			      int haylen)
-{
-    int needlen;
-    if (!needle || !haystack)	       /* protect against null pointers */
-	return 0;
-    needlen = strlen(needle);
-    while (1) {
-	/*
-	 * Is it at the start of the string?
-	 */
-	if (haylen >= needlen &&       /* haystack is long enough */
-	    !memcmp(needle, haystack, needlen) &&	/* initial match */
-	    (haylen == needlen || haystack[needlen] == ',')
-	    /* either , or EOS follows */
-	    )
-	    return 1;
-	/*
-	 * If not, search for the next comma and resume after that.
-	 * If no comma found, terminate.
-	 */
-	while (haylen > 0 && *haystack != ',')
-	    haylen--, haystack++;
-	if (haylen == 0)
-	    return 0;
-	haylen--, haystack++;	       /* skip over comma itself */
-    }
-}
-
-/*
- * Similar routine for checking whether we have the first string in a list.
+ * Utility routines for decoding comma-separated strings in KEXINIT.
  */
 static int first_in_commasep_string(char const *needle, char const *haystack,
 				    int haylen)
@@ -6165,9 +6133,7 @@ static int first_in_commasep_string(char const *needle, char const *haystack,
     if (!needle || !haystack)	       /* protect against null pointers */
 	return 0;
     needlen = strlen(needle);
-    /*
-     * Is it at the start of the string?
-     */
+
     if (haylen >= needlen &&       /* haystack is long enough */
 	!memcmp(needle, haystack, needlen) &&	/* initial match */
 	(haylen == needlen || haystack[needlen] == ',')
@@ -6175,6 +6141,28 @@ static int first_in_commasep_string(char const *needle, char const *haystack,
 	)
 	return 1;
     return 0;
+}
+
+static int in_commasep_string(char const *needle, char const *haystack,
+			      int haylen)
+{
+    char *p;
+
+    if (!needle || !haystack)	       /* protect against null pointers */
+	return 0;
+    /*
+     * Is it at the start of the string?
+     */
+    if (first_in_commasep_string(needle, haystack, haylen))
+	return 1;
+    /*
+     * If not, search for the next comma and resume after that.
+     * If no comma found, terminate.
+     */
+    p = memchr(haystack, ',', haylen);
+    if (!p) return 0;
+    /* + 1 to skip over comma */
+    return in_commasep_string(needle, p + 1, haylen - (p + 1 - haystack));
 }
 
 /*
@@ -6852,7 +6840,8 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
         }
     } else if (ssh->kex->main_type == KEXTYPE_ECDH) {
 
-        logeventf(ssh, "Doing ECDH key exchange with hash %s",
+        logeventf(ssh, "Doing ECDH key exchange with curve %s and hash %s",
+                  ssh_ecdhkex_curve_textname(ssh->kex),
                   ssh->kex->hash->text_name);
         ssh->pkt_kctx = SSH2_PKTCTX_ECDHKEX;
 
@@ -7842,9 +7831,14 @@ static void ssh_check_termination(Ssh ssh)
     }
 }
 
-void ssh_sharing_downstream_connected(Ssh ssh, unsigned id)
+void ssh_sharing_downstream_connected(Ssh ssh, unsigned id,
+                                      const char *peerinfo)
 {
-    logeventf(ssh, "Connection sharing downstream #%u connected", id);
+    if (peerinfo)
+        logeventf(ssh, "Connection sharing downstream #%u connected from %s",
+                  id, peerinfo);
+    else
+        logeventf(ssh, "Connection sharing downstream #%u connected", id);
 }
 
 void ssh_sharing_downstream_disconnected(Ssh ssh, unsigned id)
