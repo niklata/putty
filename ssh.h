@@ -347,10 +347,7 @@ struct ssh_hash {
 
 struct ssh_kex {
     const char *name, *groupname;
-    enum { KEXTYPE_DH, KEXTYPE_RSA, KEXTYPE_ECDH, KEXTYPE_C25519 } main_type;
-    /* For DH */
-    const unsigned char *pdata, *gdata; /* NULL means group exchange */
-    int plen, glen;
+    enum { KEXTYPE_DH, KEXTYPE_RSA, KEXTYPE_ECDH } main_type;
     const struct ssh_hash *hash;
     const void *extra;                 /* private to the kex methods */
 };
@@ -437,7 +434,6 @@ extern const struct ssh_kexes ssh_diffiehellman_group14;
 extern const struct ssh_kexes ssh_diffiehellman_gex;
 extern const struct ssh_kexes ssh_rsa_kex;
 extern const struct ssh_kexes ssh_ecdh_kex;
-extern const struct ssh_kexes ssh_c25519_kex;
 extern const struct ssh_signkey ssh_dss;
 extern const struct ssh_signkey ssh_rsa;
 extern const struct ssh_signkey ssh_ecdsa_ed25519;
@@ -647,16 +643,6 @@ Bignum bignum_from_decimal(const char *decimal);
 #ifdef DEBUG
 void diagbn(char *prefix, Bignum md);
 #endif
-
-#define CURVE25519_SIZE 32
-struct c25519_ctx {
-    unsigned char client_key[CURVE25519_SIZE];
-    unsigned char client_pubkey[CURVE25519_SIZE];
-    unsigned char *server_pubkey;
-};
-void c25519_init(struct c25519_ctx *ctx);
-Bignum c25519_mix(struct c25519_ctx *ctx);
-void c25519_cleanup(void *handle);
 
 int dh_is_gex(const struct ssh_kex *kex);
 void *dh_setup_group(const struct ssh_kex *kex);

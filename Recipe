@@ -217,8 +217,8 @@ NONSSH   = telnet raw rlogin ldisc pinger
 SSH      = ssh sshcrc sshdes sshmd5 sshrsa sshrand sshsha sshblowf
          + sshdh sshcrcda sshpubk sshzlib sshdss x11fwd portfwd
          + sshaes sshsh256 sshsh512 sshchacha sshpoly1305
-         + sshcipher-chachapoly smult_curve25519_ref sshc25519 sshbn
-         + wildcard pinger ssharcf sshgssc pgssapi sshshare sshecc
+         + sshcipher-chachapoly sshbn wildcard pinger ssharcf
+         + sshgssc pgssapi sshshare sshecc
 WINSSH   = SSH winnoise winsecur winpgntc wingss winshare winnps winnpc
          + winhsock errsock
 UXSSH    = SSH uxnoise uxagentc uxgss uxshare

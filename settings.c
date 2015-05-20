@@ -20,8 +20,7 @@ static const struct keyvalwhere ciphernames[] = {
 };
 
 static const struct keyvalwhere kexnames[] = {
-    { "ecdh",               KEX_ECDH,       -1, -1 },
-    { "curve25519",         KEX_C25519,     -1, +1 },
+    { "ecdh",               KEX_ECDH,       -1, +1 },
     { "dh-gex-sha1",        KEX_DHGEX,      -1, -1 },
     { "dh-group14-sha1",    KEX_DHGROUP14,  -1, -1 },
     { "dh-group1-sha1",     KEX_DHGROUP1,   -1, -1 },
@@ -776,10 +775,10 @@ void load_open_settings(void *sesskey, Conf *conf)
 	const char *default_kexes;
 	i = 2 - gppi_raw(sesskey, "BugDHGEx2", 0);
 	if (i == FORCE_ON)
-            default_kexes = "curve25519,ecdh,dh-group14-sha1,dh-group1-sha1,rsa,"
+            default_kexes = "ecdh,dh-group14-sha1,dh-group1-sha1,rsa,"
                 "WARN,dh-gex-sha1";
 	else
-            default_kexes = "curve25519,ecdh,dh-gex-sha1,dh-group14-sha1,"
+            default_kexes = "ecdh,dh-gex-sha1,dh-group14-sha1,"
                 "dh-group1-sha1,rsa,WARN";
 	gprefs(sesskey, "KEX", default_kexes,
 	       kexnames, KEX_MAX, conf, CONF_ssh_kexlist);

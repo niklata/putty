@@ -430,7 +430,6 @@ static void kexlist_handler(union control *ctrl, void *dlg,
 	int i;
 
 	static const struct { const char *s; int k; } kexes[] = {
-	    { "Curve25519 key exchange",	KEX_C25519 },
 	    { "Diffie-Hellman group 1",		KEX_DHGROUP1 },
 	    { "Diffie-Hellman group 14",	KEX_DHGROUP14 },
 	    { "Diffie-Hellman group exchange",	KEX_DHGEX },
